@@ -10,6 +10,7 @@ from .rules import (UTC, Error, booking, booking_fields, check_occupancy, clock,
                     hours, identifier, instant, json_equal, local_text, overlaps, party, require, selection)
 from .state import empty_state, fixture, import_state, public
 from .policies import configured, event, selected_terms, validate_policy
+from .replans import assign, blocked, interval, solve
 
 
 class Service:
@@ -81,6 +82,11 @@ class Service:
         remaining = (instant(record['starts_at']) - now).total_seconds()
         require(remaining > record['accepted_terms']['cancellation_cutoff_minutes'] * 60, 409, 'cutoff_passed')
 
+    def occupancy(self, candidates, existing):
+        check_occupancy(candidates, existing)
+        require(not any(r['status'] == 'confirmed' and blocked(r, self.state['closures']) for r in candidates),
+                409, 'table_unavailable')
+
     def changed(self, record, changes, now):
         if 'expected_revision' in changes:
             expected = changes['expected_revision']
@@ -136,7 +142,7 @@ class Service:
                 for ids in choices:
                     candidate['table_ids'] = ids
                     capacity = sum(tables[tid]['capacity'] for tid in ids)
-                    if capacity >= size and not any(r['status'] == 'confirmed' and overlaps(candidate, r)
+                    if capacity >= size and not blocked(candidate, self.state['closures']) and not any(r['status'] == 'confirmed' and overlaps(candidate, r)
                                                    for r in self.state['reservations'].values()):
                         options.append(dict(table_ids=list(ids), capacity=capacity))
                         if len(ids) == 1:
@@ -148,7 +154,7 @@ class Service:
                     for table in restaurant['tables']:
                         candidate['table_ids'] = [table['id']]
                         capacity = table['capacity'] >= size
-                        no_overlap = not any(r['status'] == 'confirmed' and overlaps(candidate, r)
+                        no_overlap = not blocked(candidate, self.state['closures']) and not any(r['status'] == 'confirmed' and overlaps(candidate, r)
                                              for r in self.state['reservations'].values())
                         explanations.append(dict(table_id=table['id'], policy_version=terms['policy_version'],
                                                  available=capacity and no_overlap,
@@ -169,7 +175,7 @@ class Service:
             ref = secrets.token_hex(6).upper()
         candidate.update(reservation_id=self.unique_id(ids), reference=ref, user_id=uid,
                          status='confirmed', created_at=datetime.now(UTC).isoformat(), revision=1, accepted_terms=terms)
-        check_occupancy([candidate], self.state['reservations'].values())
+        self.occupancy([candidate], self.state['reservations'].values())
         return [candidate], public(candidate)
 
     def moves(self, body, uid):
@@ -188,7 +194,7 @@ class Service:
             require(restaurant_id is None or restaurant_id == record['restaurant_id'])
             restaurant_id = record['restaurant_id']
             candidates.append(self.changed(record, item, now))
-        check_occupancy(candidates, [r for ref, r in self.state['reservations'].items() if ref not in refs])
+        self.occupancy(candidates, [r for ref, r in self.state['reservations'].items() if ref not in refs])
         return candidates, {'reservations': [public(r) for r in candidates]}
 
     def series_for(self, ref):
@@ -201,7 +207,7 @@ class Service:
     def tick(self, rid):
         self.state['restaurant_revisions'][rid] += 1
 
-    def commit_records(self, candidates):
+    def commit_records(self, candidates, exceptions=True, plan_id=None):
         changed_restaurants, changed_series = set(), set()
         for candidate in candidates:
             ref = candidate['reference']
@@ -213,10 +219,16 @@ class Service:
                 self.state['histories'][ref] = [event(candidate)]
             else:
                 at = max(datetime.now(UTC), instant(self.state['histories'][ref][-1]['at'])).isoformat()
-                self.state['histories'][ref].append(event(candidate, before, 'changed', at))
+                entry = event(candidate, before, 'changed', at)
+                if plan_id is not None:
+                    entry.update(event='reassigned', plan_id=plan_id,
+                                 changes=[dict(field='table_ids', **{'from': list(before['table_ids']),
+                                                                   'to': list(candidate['table_ids'])})])
+                self.state['histories'][ref].append(entry)
                 series, occurrence = self.series_for(ref)
                 if series:
-                    occurrence['exception'] = True
+                    if exceptions:
+                        occurrence['exception'] = True
                     changed_series.add(series['series_id'])
             changed_restaurants.add(candidate['restaurant_id'])
         for rid in changed_restaurants:
@@ -262,7 +274,7 @@ class Service:
             candidate.update(reservation_id=rid, reference=reference, user_id=uid, status='confirmed',
                              created_at=datetime.now(UTC).isoformat(), revision=1, accepted_terms=terms)
             # Each index's ordinary booking error wins before examining the next.
-            check_occupancy([candidate], list(self.state['reservations'].values()) + candidates)
+            self.occupancy([candidate], list(self.state['reservations'].values()) + candidates)
             candidates.append(candidate)
             occurrences.append(dict(index=index, reference=reference, exception=False, scheduled_local=local))
         sid = self.unique_id(self.state['series'])
@@ -282,6 +294,65 @@ class Service:
         self.tick(rid)
         return policy
 
+    def amend_series(self, sid, body, uid):
+        series = self.state['series'].get(sid)
+        require(series is not None and series['user_id'] == uid, 404, 'not_found')
+        expected, index, local_time = (body.get(k) for k in ('expected_revision', 'from_index', 'local_time'))
+        require(type(expected) is int and expected > 0)
+        require(type(index) is int and 0 <= index < len(series['occurrences']))
+        require(type(local_time) is str and re.fullmatch(r'[0-9]{2}:[0-9]{2}', local_time))
+        clock(local_time)
+        require(expected == series['revision'], 409, 'stale_revision')
+        candidates, now = [], datetime.now(UTC)
+        for occurrence in series['occurrences'][index:]:
+            record = self.state['reservations'][occurrence['reference']]
+            if occurrence['exception'] or record['status'] == 'cancelled':
+                continue
+            local = occurrence['scheduled_local'][:10] + 'T' + local_time
+            # A genuine no-op keeps its accepted terms even after the cutoff.
+            candidate = record if local == record['starts_at_local'] else self.changed(record, {'starts_at_local': local}, now)
+            candidates.append(candidate)
+        refs = {r['reference'] for r in candidates}
+        self.occupancy(candidates, [r for ref, r in self.state['reservations'].items() if ref not in refs])
+        self.commit_records(candidates, exceptions=False)
+        return self.series_response(series)
+
+    def replan(self, rid, body, uid, plan_id=None):
+        restaurant = self.restaurant(rid)
+        require(uid in restaurant['manager_user_ids'], 403, 'forbidden')
+        if plan_id is None:
+            closure = interval(body, restaurant)
+            assignments, moved, unused, records = solve(restaurant, self.state['reservations'].values(),
+                                                       self.state['closures'], closure)
+            plan_id = self.unique_id(self.state['plans'])
+            response = dict(plan_id=plan_id, restaurant_revision=self.state['restaurant_revisions'][rid],
+                            closure=closure, assignments=assignments, moved_count=moved, unused_seats=unused)
+            self.state['plans'][plan_id] = dict(restaurant_id=rid, preview=copy.deepcopy(response),
+                                               applied=False, before=copy.deepcopy(records))
+            return response
+        plan = self.state['plans'].get(plan_id)
+        require(plan is not None and plan['restaurant_id'] == rid, 404, 'not_found')
+        require(not plan['applied'], 409, 'plan_already_applied')
+        preview = plan['preview']
+        require(preview['restaurant_revision'] == self.state['restaurant_revisions'][rid], 409, 'stale_plan')
+        candidates = []
+        for item in preview['assignments']:
+            record = self.state['reservations'][item['reference']]
+            candidate = assign(record, item['table_ids'])
+            if item['changed']:
+                candidate['revision'] += 1
+            candidates.append(candidate)
+        self.state['closures'].append(dict(preview['closure'], restaurant_id=rid, plan_id=plan_id))
+        refs = {r['reference'] for r in candidates}
+        self.occupancy(candidates, [r for ref, r in self.state['reservations'].items() if ref not in refs])
+        self.commit_records(candidates, exceptions=False, plan_id=plan_id)
+        # commit_records ticks only for moved records; even an empty repair
+        # installs a closure and advances the restaurant revision exactly once.
+        self.state['restaurant_revisions'][rid] = preview['restaurant_revision'] + 1
+        plan['applied'] = True
+        return dict(plan_id=plan_id, restaurant_revision=self.state['restaurant_revisions'][rid],
+                    reservations=[public(r) for r in candidates])
+
     def idempotent(self, method, path, body, uid, headers):
         key = headers.get('idempotency-key')
         require(key is not None and key != '', 400, 'missing_idempotency_key')
@@ -295,9 +366,14 @@ class Service:
             self.commit_records(candidates)
         elif path == '/series':
             response = self.adopt(body, uid)
+        elif re.fullmatch(r'/series/[^/]+/amend', path):
+            response = self.amend_series(path.split('/')[2], body, uid)
+        elif re.fullmatch(r'/restaurants/[^/]+/replans(?:/[^/]+/apply)?', path):
+            parts = path.split('/')
+            response = self.replan(parts[2], body, uid, parts[4] if len(parts) == 6 else None)
         else:
             response = self.publish(path, body, uid)
-        receipt = dict(schema_version=3, user_id=uid, method=method, path=path, key=key,
+        receipt = dict(schema_version=4, user_id=uid, method=method, path=path, key=key,
                        body=copy.deepcopy(body), response=copy.deepcopy(response))
         self.state['receipts'].append(receipt)
         return 201, response
@@ -354,7 +430,9 @@ class Service:
             require(series is not None and series['user_id'] == uid, 404, 'not_found')
             return 200, self.series_response(series)
         if method == 'POST' and (path in ('/reservations', '/reservation-moves', '/series')
-                                 or re.fullmatch(r'/restaurants/.+/policies', path)):
+                                 or re.fullmatch(r'/restaurants/.+/policies', path)
+                                 or re.fullmatch(r'/series/[^/]+/amend', path)
+                                 or re.fullmatch(r'/restaurants/[^/]+/replans(?:/[^/]+/apply)?', path)):
             return self.idempotent(method, path, body, uid, headers)
         if method == 'GET' and path == '/reservations':
             records = [r for r in self.state['reservations'].values() if r['user_id'] == uid]
@@ -379,7 +457,7 @@ class Service:
                 return 200, public(record)
             if method == 'PATCH' and not match.group(2):
                 candidate = self.changed(record, body, datetime.now(UTC))
-                check_occupancy([candidate], [r for ref, r in self.state['reservations'].items() if ref != record['reference']])
+                self.occupancy([candidate], [r for ref, r in self.state['reservations'].items() if ref != record['reference']])
                 self.commit_records([candidate])
                 return 200, public(candidate)
         raise Error(404, 'not_found')

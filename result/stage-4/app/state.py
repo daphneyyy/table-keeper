@@ -4,6 +4,8 @@ import re
 from datetime import timedelta
 
 from . import legacy_state
+from .replans import assign, blocked, interval
+from .rules import clock
 from .policies import TERM_FIELDS, base_terms, configured, initialize_records, validate_policy
 from .rules import (Error, booking, booking_fields, check_occupancy, field, identifier,
                     instant, json_equal, local_text, require)
@@ -14,7 +16,8 @@ reference = legacy_state.reference
 
 def empty_state():
     state = legacy_state.empty_state()
-    state['schema_version'] = 3
+    state['schema_version'] = 4
+    state['closures'], state['plans'] = [], {}
     initialize_records(state)
     return state
 
@@ -30,7 +33,8 @@ def managers(raw, users):
 
 def fixture(body):
     state = legacy_state.fixture(body)
-    state['schema_version'] = 3
+    state['schema_version'] = 4
+    state['closures'], state['plans'] = [], {}
     initialize_records(state)
     for raw in body['restaurants']:
         state['restaurants'][raw['id']]['manager_user_ids'] = managers(raw, state['users'])
@@ -57,14 +61,14 @@ def validate_record(raw, state, uid, version=3):
         keys.add('table_ids')
         if len(ids) == 1:
             keys.add('table_id')
-    if version == 3:
+    if version >= 3:
         keys.update(('revision', 'accepted_terms'))
         require(type(raw.get('revision')) is int and raw['revision'] > 0)
     require(set(raw) == keys)
     ref = reference(field(raw, 'reference'))
     require(ref in state['reservations'])
     current = state['reservations'][ref]
-    if version == 3:
+    if version >= 3:
         require(raw['revision'] <= current['revision'])
         history = state['histories'][ref]
         require(type(history) is list and len(history) >= raw['revision'])
@@ -73,7 +77,7 @@ def validate_record(raw, state, uid, version=3):
     rid = identifier(raw, 'restaurant_id')
     require(rid in state['restaurants'] and rid == current['restaurant_id'])
     restaurant = state['restaurants'][rid]
-    terms = raw['accepted_terms'] if version == 3 else base_terms(restaurant)
+    terms = raw['accepted_terms'] if version >= 3 else base_terms(restaurant)
     validate_terms(terms, restaurant, state['policies'][rid])
     computed = booking(configured(restaurant, terms), booking_fields(raw))
     if version == 1:
@@ -91,7 +95,11 @@ def validate_history(state, ref):
     previous_at = None
     values = {}
     for index, item in enumerate(entries, 1):
-        require(type(item) is dict and set(item) == {'seq', 'at', 'event', 'changes', 'revision', 'accepted_terms'})
+        require(type(item) is dict)
+        keys = {'seq', 'at', 'event', 'changes', 'revision', 'accepted_terms'}
+        if item.get('event') == 'reassigned':
+            keys.add('plan_id')
+        require(set(item) == keys)
         require(type(item['seq']) is int and item['seq'] == index
                 and type(item['revision']) is int and item['revision'] == index)
         at = instant(item['at'])
@@ -100,8 +108,15 @@ def validate_history(state, ref):
         rid = record['restaurant_id']
         validate_terms(item['accepted_terms'], state['restaurants'][rid], state['policies'][rid])
         kind = item['event']
-        require(kind == 'created' if index == 1 else kind in ('changed', 'cancelled'))
+        require(kind == 'created' if index == 1 else kind in ('changed', 'cancelled', 'reassigned'))
         changes = field(item, 'changes', list)
+        if kind == 'reassigned':
+            plan = state['plans'].get(item['plan_id'])
+            require(plan is not None and plan['applied'] and plan['restaurant_id'] == rid)
+            require(len(changes) == 1 and changes[0]['field'] == 'table_ids')
+            require(json_equal(item['accepted_terms'], entries[index - 2]['accepted_terms']))
+            assignment = next((a for a in plan['preview']['assignments'] if a['reference'] == ref), None)
+            require(assignment is not None and assignment['changed'] and assignment['table_ids'] == changes[0]['to'])
         if kind == 'cancelled':
             require(index == len(entries) and record['status'] == 'cancelled' and changes == [])
         else:
@@ -122,7 +137,7 @@ def validate_history(state, ref):
                 else:
                     require(change['from'] == values.get(name))
                     values[name] = change['to']
-                if kind == 'changed':
+                if kind in ('changed', 'reassigned'):
                     require(change['from'] != change['to'])
             if kind == 'created':
                 require(order == [0, 1, 2] and all(c['from'] is None for c in changes))
@@ -148,21 +163,127 @@ def validate_series_response(response, state, uid):
         validate_record(item['reservation'], state, uid)
 
 
+def validate_plans(state):
+    applied = set()
+    for pid, plan in state['plans'].items():
+        require(type(plan) is dict and set(plan) == {'restaurant_id', 'preview', 'applied', 'before'})
+        rid = plan['restaurant_id']
+        require(rid in state['restaurants'] and type(plan['applied']) is bool)
+        preview = plan['preview']
+        require(type(preview) is dict and set(preview) == {'plan_id', 'restaurant_revision', 'closure',
+                                                         'assignments', 'moved_count', 'unused_seats'})
+        require(identifier(preview, 'plan_id') == pid)
+        revision = preview['restaurant_revision']
+        require(type(revision) is int and 0 <= revision <= state['restaurant_revisions'][rid])
+        if plan['applied']:
+            require(revision < state['restaurant_revisions'][rid])
+            applied.add(pid)
+        restaurant = state['restaurants'][rid]
+        require(json_equal(interval(preview['closure'], restaurant), preview['closure']))
+        before, assignments = plan['before'], preview['assignments']
+        require(type(before) is list and type(assignments) is list and len(before) == len(assignments) <= 6)
+        require(len(restaurant['tables']) <= 6 and len(restaurant.get('combinable', [])) <= 4)
+        refs, changed, unused, candidates = [], 0, 0, []
+        options = [[t['id']] for t in restaurant['tables']] + restaurant.get('combinable', [])
+        for record, item in zip(before, assignments):
+            uid = identifier(record, 'user_id')
+            validate_record(public(record), state, uid)
+            require(record['restaurant_id'] == rid and record['status'] == 'confirmed')
+            require(instant(record['starts_at']) < instant(preview['closure']['to'])
+                    and instant(preview['closure']['from']) < instant(record['ends_at']))
+            require(type(item) is dict and set(item) == {'reference', 'table_ids', 'changed'})
+            require(item['reference'] == record['reference'] and item['table_ids'] in options)
+            require(type(item['changed']) is bool and item['changed'] == (item['table_ids'] != record['table_ids']))
+            refs.append(item['reference'])
+            changed += item['changed']
+            seats = sum(record['accepted_terms']['capacities'][tid] for tid in item['table_ids']) - record['party_size']
+            require(seats >= 0)
+            unused += seats
+            candidate = assign(record, item['table_ids'])
+            require(not blocked(candidate, [dict(preview['closure'], restaurant_id=rid)]))
+            candidates.append(candidate)
+            if plan['applied'] and item['changed']:
+                entries = state['histories'][record['reference']]
+                require(len(entries) > record['revision'])
+                entry = entries[record['revision']]
+                require(entry['event'] == 'reassigned' and entry['plan_id'] == pid)
+        require(refs == sorted(set(refs)))
+        require(type(preview['moved_count']) is int and preview['moved_count'] == changed)
+        require(type(preview['unused_seats']) is int and preview['unused_seats'] == unused)
+        check_occupancy(candidates, [])
+    seen = set()
+    for closure in state['closures']:
+        require(type(closure) is dict and set(closure) == {'plan_id', 'restaurant_id', 'table_id', 'from', 'to'})
+        pid = closure['plan_id']
+        require(pid in applied and pid not in seen)
+        seen.add(pid)
+        plan = state['plans'][pid]
+        require(json_equal(closure, dict(plan['preview']['closure'], restaurant_id=plan['restaurant_id'], plan_id=pid)))
+    require(seen == applied)
+    require(not any(r['status'] == 'confirmed' and blocked(r, state['closures']) for r in state['reservations'].values()))
+
+
+def validate_new_receipt(receipt, state):
+    path, request, response, uid = (receipt[k] for k in ('path', 'body', 'response', 'user_id'))
+    amendment = re.fullmatch(r'/series/([^/]+)/amend', path)
+    if amendment:
+        sid = amendment.group(1)
+        require(sid in state['series'] and state['series'][sid]['user_id'] == uid)
+        validate_series_response(response, state, uid)
+        require(response['series_id'] == sid)
+        expected, index, local_time = (request.get(k) for k in ('expected_revision', 'from_index', 'local_time'))
+        require(type(expected) is int and expected > 0 and response['revision'] in (expected, expected + 1))
+        require(type(index) is int and 0 <= index < len(response['occurrences']))
+        clock(local_time)
+        for occurrence in response['occurrences'][index:]:
+            if not occurrence['exception'] and occurrence['reservation']['status'] == 'confirmed':
+                scheduled = state['series'][sid]['occurrences'][occurrence['index']]['scheduled_local']
+                require(occurrence['reservation']['starts_at_local'] == scheduled[:10] + 'T' + local_time)
+        return
+    match = re.fullmatch(r'/restaurants/([^/]+)/replans(?:/([^/]+)/apply)?', path)
+    require(match is not None)
+    rid, pid = match.groups()
+    require(rid in state['restaurants'] and uid in state['restaurants'][rid]['manager_user_ids'])
+    require(type(response) is dict)
+    if pid is None:
+        pid = identifier(response, 'plan_id')
+        require(pid in state['plans'] and state['plans'][pid]['restaurant_id'] == rid)
+        require(json_equal(response, state['plans'][pid]['preview']))
+        require(json_equal(interval(request, state['restaurants'][rid]), response['closure']))
+        return
+    require(pid in state['plans'] and state['plans'][pid]['restaurant_id'] == rid and state['plans'][pid]['applied'])
+    plan = state['plans'][pid]
+    require(set(response) == {'plan_id', 'restaurant_revision', 'reservations'} and response['plan_id'] == pid)
+    require(type(response['restaurant_revision']) is int
+            and response['restaurant_revision'] == plan['preview']['restaurant_revision'] + 1)
+    records = field(response, 'reservations', list)
+    require(len(records) == len(plan['before']))
+    for record, old, item in zip(records, plan['before'], plan['preview']['assignments']):
+        validate_record(record, state, old['user_id'])
+        expected = assign(old, item['table_ids'])
+        expected['revision'] += int(item['changed'])
+        require(json_equal(record, public(expected)))
+
+
 def import_state(body):
     try:
         raw = field(body, 'state', dict)
         if type(raw.get('schema_version')) is int and raw['schema_version'] in (1, 2):
             state = legacy_state.import_state(body)
-            state['schema_version'] = 3
+            state['schema_version'] = 4
+            state['closures'], state['plans'] = [], {}
             initialize_records(state)
             return state
         require(body.get('track') == 'tablekeeper' and type(body.get('format_version')) is int
                 and body['format_version'] == 1)
         state = copy.deepcopy(raw)
-        require(set(state) == set(empty_state()) and type(state['schema_version']) is int and state['schema_version'] == 3)
+        if type(state.get('schema_version')) is int and state['schema_version'] == 3:
+            state.update(schema_version=4, closures=[], plans={})
+        require(set(state) == set(empty_state()) and type(state['schema_version']) is int and state['schema_version'] == 4)
         for name in ('users', 'restaurants', 'reservations', 'sessions', 'policies', 'histories', 'series', 'restaurant_revisions'):
             require(type(state[name]) is dict)
         require(type(state['receipts']) is list)
+        require(type(state['closures']) is list and type(state['plans']) is dict)
         skeleton = {k: copy.deepcopy(state[k]) for k in ('users', 'restaurants', 'sessions')}
         skeleton.update(schema_version=2, reservations={}, receipts=[])
         for restaurant in skeleton['restaurants'].values():
@@ -214,12 +335,13 @@ def import_state(body):
                 start = local if start is None else start
                 require(local == start + timedelta(days=index * series['interval_weeks'] * 7))
                 if not item['exception']:
-                    require(record['starts_at_local'] == item['scheduled_local'])
+                    require(record['starts_at_local'][:10] == item['scheduled_local'][:10])
+        validate_plans(state)
         scopes = set()
         for receipt in state['receipts']:
             require(type(receipt) is dict and set(receipt) == {'schema_version', 'user_id', 'method', 'path', 'key', 'body', 'response'})
             version = receipt['schema_version']
-            require(type(version) is int and version in (1, 2, 3))
+            require(type(version) is int and version in (1, 2, 3, 4))
             uid = identifier(receipt, 'user_id')
             require(uid in state['users'] and receipt['method'] == 'POST')
             key, path = field(receipt, 'key'), field(receipt, 'path')
@@ -249,19 +371,19 @@ def import_state(body):
                         fields = changes
                     else:
                         require(item.get('reference') == record['reference'])
-                        if version == 3 and 'expected_revision' in item:
+                        if version >= 3 and 'expected_revision' in item:
                             expected_revision = item['expected_revision']
                             require(type(expected_revision) is int and expected_revision > 0
                                     and record['revision'] in (expected_revision, expected_revision + 1))
                         fields = booking_fields(record, changes)
-                    terms = record['accepted_terms'] if version == 3 else base_terms(state['restaurants'][rid])
+                    terms = record['accepted_terms'] if version >= 3 else base_terms(state['restaurants'][rid])
                     computed = booking(configured(state['restaurants'][rid], terms), fields)
                     if version == 1:
                         computed.pop('table_ids')
                     require(all(record[k] == v for k, v in computed.items()))
                 require(len(restaurants) == 1)
                 check_occupancy([dict(r, table_ids=[r['table_id']]) if version == 1 else r for r in records], [])
-            elif path == '/series' and version == 3:
+            elif path == '/series' and version >= 3:
                 validate_series_response(response, state, uid)
                 require(response['revision'] == 1 and request.get('anchor_reference') == response['occurrences'][0]['reference'])
                 require(all(o['exception'] is False and o['reservation']['status'] == 'confirmed'
@@ -269,7 +391,7 @@ def import_state(body):
                 require(all(o['reservation']['revision'] == 1 for o in response['occurrences'][1:]))
                 require(type(request.get('count')) is int and request['count'] == len(response['occurrences']))
                 require(type(request.get('interval_weeks')) is int and request['interval_weeks'] == response['interval_weeks'])
-            elif version == 3 and re.fullmatch(r'/restaurants/.+/policies', path):
+            elif version >= 3 and re.fullmatch(r'/restaurants/.+/policies', path):
                 rid = path[len('/restaurants/'):-len('/policies')]
                 require(rid in state['restaurants'] and uid in state['restaurants'][rid]['manager_user_ids'])
                 policy = validate_policy(request, state['restaurants'][rid])
@@ -277,6 +399,8 @@ def import_state(body):
                 require(1 <= version_number <= len(state['policies'][rid]))
                 policy['policy_version'] = version_number
                 require(response == policy == state['policies'][rid][version_number - 1])
+            elif version == 4:
+                validate_new_receipt(receipt, state)
             else:
                 raise Error()
         return state
