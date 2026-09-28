@@ -38,10 +38,15 @@ async def main():
   availability=c.get('/availability',params={'restaurant_id':'fern','date':'2030-01-01','party_size':5}).json()
   row=page.locator('.seating-row').filter(has=page.get_by_test_id('slot-window+garden-18:00'))
   capacity_text=await row.locator('.capacity').inner_text()
+  assert capacity_text=='Up to 6 guests', capacity_text
+  unavailable_row=page.locator('.seating-row').filter(has=page.get_by_test_id('slot-window-18:00'))
+  assert await unavailable_row.locator('.capacity').inner_text()=='Single table'
   await page.get_by_test_id('slot-window+garden-18:00').click()
+  assert 'Cancellation terms are confirmed with your reservation.' in await page.locator('.booking-card > .fine-print').inner_text()
   await page.get_by_test_id('booking-submit').click()
   await expect(page.get_by_test_id('confirmation-reference')).to_be_visible()
   fineprint=await page.locator('.booking-card > .fine-print').inner_text()
+  assert '30 minutes' in fineprint and '120 minutes' not in fineprint
   token=await page.evaluate("JSON.parse(sessionStorage.getItem('tablekeeper-session')).token")
   ref=await page.get_by_test_id('confirmation-reference').inner_text()
   record=c.get('/reservations/'+ref,headers={'Authorization':'Bearer '+token}).json()
@@ -56,11 +61,18 @@ async def main():
   await page.set_viewport_size({'width':375,'height':812})
   assert await page.evaluate('document.documentElement.scrollWidth <= innerWidth')
   await page.screenshot(path=str(out/'policy-confirmation-375.png'),full_page=True)
+  # A newer policy cannot rewrite an original receipt's accepted cutoff.
+  later=dict(policy,cancellation_cutoff_minutes=10)
+  assert c.post('/restaurants/fern/policies',json=later,headers={'Authorization':'Bearer '+manager,'Idempotency-Key':'later-browser-policy'}).status_code==201
+  await page.get_by_test_id('booking-submit').click()
+  await expect(page.get_by_test_id('confirmation-reference')).to_have_text(ref)
+  assert '30 minutes' in await page.locator('.booking-card > .fine-print').inner_text()
   await page.get_by_role('link',name='View or manage reservation').click()
   await expect(page.get_by_test_id('reservation-tables')).to_contain_text('Window nook + Garden side')
   result['lookup_detail']=await page.get_by_test_id('reservation-detail').inner_text()
   (out/'policy-ui.json').write_text(json.dumps(result,indent=2))
   print(json.dumps(result,indent=2))
+  print('PASS authoritative/neutral capacity, neutral pending cutoff, accepted cutoff after success/replay, 375/1440 rendering')
   await browser.close()
 
 asyncio.run(main())

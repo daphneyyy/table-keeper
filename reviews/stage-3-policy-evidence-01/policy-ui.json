@@ -1,0 +1,16 @@
+{
+  "grid_follows_published_policy": true,
+  "available_option": {
+    "table_ids": [
+      "window",
+      "garden"
+    ],
+    "capacity": 6
+  },
+  "displayed_capacity": "Up to 4 guests",
+  "displayed_booking_fineprint": "Times are local to Europe/Berlin. Cancellation and changes close 120 minutes before your reservation.",
+  "accepted_cutoff_minutes": 30,
+  "accepted_ends_at": "2030-01-01T20:00:00+01:00",
+  "confirmation_details": "The Fern & Fig \u00b7 Window nook + Garden side \u00b7 2030-01-01T18:00",
+  "lookup_detail": "confirmed\nThe Fern & Fig\nReference\n2D7F4E7A9D1D\nTables\nWindow nook + Garden side\nDate & time\n2030-01-01 \u00b7 18:00\nGuests\n5\n\nLocal time \u00b7 Europe/Berlin\n\nCancel reservation"
+}

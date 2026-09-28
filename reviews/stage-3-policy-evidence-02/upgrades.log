@@ -1,0 +1,2 @@
+PASS actual stage-1→3 import: same browser token/pending body/key, old receipt labels/reference, lookup, imported-anchor adoption
+PASS actual stage-2→3 import: same browser token/pending body/key, old receipt labels/reference, lookup, imported-anchor adoption
