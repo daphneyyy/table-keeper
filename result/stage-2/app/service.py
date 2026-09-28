@@ -6,7 +6,7 @@ from datetime import datetime
 from threading import RLock
 
 from .auth import credentials, hash_password, verify
-from .rules import (UTC, Error, booking, check_occupancy, clock, date_text, field,
+from .rules import (UTC, Error, booking, booking_fields, check_occupancy, clock, date_text, field,
                     hours, identifier, instant, json_equal, overlaps, party, require)
 from .state import empty_state, fixture, import_state, public
 
@@ -84,9 +84,9 @@ class Service:
     def changed(self, record, changes, now):
         require(record['status'] != 'cancelled', 409, 'reservation_cancelled')
         self.cutoff(record, now)
-        fields = dict(record)
-        fields.update({k: v for k, v in changes.items() if k in ('table_id', 'starts_at_local', 'party_size')})
+        fields = booking_fields(record, changes)
         candidate = dict(record)
+        candidate.pop('table_id', None)
         candidate.update(booking(self.restaurant(record['restaurant_id']), fields))
         return candidate
 
@@ -114,13 +114,19 @@ class Service:
                     if exc.code in ('invalid_local_time', 'outside_opening_hours'):
                         continue
                     raise
-                available = []
-                for table in restaurant['tables']:
-                    candidate['table_id'] = table['id']
-                    if table['capacity'] >= size and not any(r['status'] == 'confirmed' and overlaps(candidate, r)
-                                                           for r in self.state['reservations'].values()):
-                        available.append(table['id'])
-                slots.append(dict(starts_at_local=local, starts_at=candidate['starts_at'], available_table_ids=available))
+                available, options = [], []
+                tables = {t['id']: t for t in restaurant['tables']}
+                choices = [[t['id']] for t in restaurant['tables']] + restaurant.get('combinable', [])
+                for ids in choices:
+                    candidate['table_ids'] = ids
+                    capacity = sum(tables[tid]['capacity'] for tid in ids)
+                    if capacity >= size and not any(r['status'] == 'confirmed' and overlaps(candidate, r)
+                                                   for r in self.state['reservations'].values()):
+                        options.append(dict(table_ids=list(ids), capacity=capacity))
+                        if len(ids) == 1:
+                            available.append(ids[0])
+                slots.append(dict(starts_at_local=local, starts_at=candidate['starts_at'],
+                                  available_table_ids=available, available_options=options))
         return dict(restaurant_id=restaurant['id'], date=query['date'], timezone=restaurant['timezone'], slots=slots)
 
     def create(self, body, uid):
@@ -163,7 +169,7 @@ class Service:
                 require(json_equal(body, receipt['body']), 409, 'idempotency_key_reuse')
                 return 200, copy.deepcopy(receipt['response'])
         candidates, response = self.create(body, uid) if path == '/reservations' else self.moves(body, uid)
-        receipt = dict(user_id=uid, method=method, path=path, key=key,
+        receipt = dict(schema_version=2, user_id=uid, method=method, path=path, key=key,
                        body=copy.deepcopy(body), response=copy.deepcopy(response))
         # All fallible domain validation precedes the atomic commit below.
         for candidate in candidates:

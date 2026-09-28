@@ -1,11 +1,13 @@
 """Explicit HTTP parsing avoids framework coercion and validation envelopes."""
 import logging
 import os
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
-from starlette.responses import Response
+from starlette.responses import Response, FileResponse
+from starlette.staticfiles import StaticFiles
 
 from .rules import Error, require
 from . import json_values
@@ -13,6 +15,16 @@ from .service import Service
 
 app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
 service = Service()
+STATIC = Path(__file__).parent / 'static'
+app.mount('/static', StaticFiles(directory=STATIC, check_dir=False), name='static')
+
+
+@app.get('/')
+@app.get('/signup')
+@app.get('/login')
+@app.get('/lookup')
+async def screen():
+    return FileResponse(STATIC / 'index.html', media_type='text/html')
 
 
 def json_response(value, status):

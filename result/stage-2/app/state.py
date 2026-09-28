@@ -5,12 +5,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .auth import credentials, hash_password, validate_hash
-from .rules import (UTC, WEEKDAYS, Error, booking, check_occupancy, clock, field,
+from .rules import (UTC, WEEKDAYS, Error, booking, booking_fields, check_occupancy, clock, field,
                     identifier, instant, positive, require)
 
 
 def empty_state():
-    return {'schema_version': 1, 'users': {}, 'restaurants': {}, 'reservations': {},
+    return {'schema_version': 2, 'users': {}, 'restaurants': {}, 'reservations': {},
             'sessions': {}, 'receipts': []}
 
 
@@ -42,6 +42,17 @@ def validate_restaurant(raw):
         require(tid not in seen)
         seen.add(tid)
         result['tables'].append(dict(id=tid, label=field(table, 'label'), capacity=positive(table, 'capacity')))
+    result['combinable'] = []
+    pairs = set()
+    for pair in field(raw, 'combinable', list) if 'combinable' in raw else []:
+        require(type(pair) is list, 400, 'malformed_request')
+        require(len(pair) == 2)
+        for tid in pair:
+            identifier({'id': tid}, 'id')
+        require(pair[0] != pair[1] and all(tid in seen for tid in pair))
+        require(frozenset(pair) not in pairs)
+        pairs.add(frozenset(pair))
+        result['combinable'].append(list(pair))
     return result
 
 
@@ -81,17 +92,27 @@ def fixture(body):
         require(ref not in state['reservations'] and rid not in ids)
         ids.add(rid)
         record = booking(state['restaurants'][restaurant_id], raw)
-        record.update(reservation_id=rid, reference=ref, user_id=uid, status='confirmed',
+        status = field(raw, 'status') if 'status' in raw else 'confirmed'
+        require(status in ('confirmed', 'cancelled'))
+        record.update(reservation_id=rid, reference=ref, user_id=uid, status=status,
                       created_at=datetime.now(UTC).isoformat())
         check_occupancy([record], state['reservations'].values())
         state['reservations'][ref] = record
     return state
 
 
-def validate_response(raw, state, owner):
+def validate_response(raw, state, owner, legacy=False):
     require(type(raw) is dict)
-    require(set(raw) == {'reservation_id', 'reference', 'restaurant_id', 'table_id', 'party_size',
-                         'status', 'starts_at_local', 'starts_at', 'ends_at', 'created_at'})
+    keys = {'reservation_id', 'reference', 'restaurant_id', 'party_size',
+            'status', 'starts_at_local', 'starts_at', 'ends_at', 'created_at'}
+    if legacy:
+        keys.add('table_id')
+    else:
+        ids = field(raw, 'table_ids', list)
+        keys.add('table_ids')
+        if len(ids) == 1:
+            keys.add('table_id')
+    require(set(raw) == keys)
     identifier(raw, 'reservation_id')
     ref = reference(field(raw, 'reference'))
     require(ref in state['reservations'])
@@ -99,7 +120,9 @@ def validate_response(raw, state, owner):
     require(current['user_id'] == owner and current['reservation_id'] == raw['reservation_id'])
     rid = identifier(raw, 'restaurant_id')
     require(rid in state['restaurants'] and rid == current['restaurant_id'])
-    computed = booking(state['restaurants'][rid], raw)
+    computed = booking(state['restaurants'][rid], booking_fields(raw))
+    if legacy:
+        computed.pop('table_ids')
     require(all(raw.get(k) == v for k, v in computed.items()))
     require(raw.get('status') in ('confirmed', 'cancelled'))
     instant(field(raw, 'created_at'))
@@ -114,10 +137,24 @@ def import_state(body):
                 and body['format_version'] == 1)
         state = copy.deepcopy(field(body, 'state', dict))
         require(set(state) == set(empty_state()) and type(state['schema_version']) is int
-                and state['schema_version'] == 1)
+                and state['schema_version'] in (1, 2))
+        legacy = state['schema_version'] == 1
         for name in ('users', 'restaurants', 'reservations', 'sessions'):
             require(type(state[name]) is dict)
         require(type(state['receipts']) is list)
+        if legacy:
+            # Live records gain the new shape. Historical request/response JSON
+            # is never rewritten: even fields unknown to stage 1 remain intact.
+            for restaurant in state['restaurants'].values():
+                require(type(restaurant) is dict and 'combinable' not in restaurant)
+                restaurant['combinable'] = []
+            for record in state['reservations'].values():
+                require(type(record) is dict and 'table_ids' not in record)
+                record['table_ids'] = [identifier(record, 'table_id')]
+            for receipt in state['receipts']:
+                require(type(receipt) is dict and 'schema_version' not in receipt)
+                receipt['schema_version'] = 1
+            state['schema_version'] = 2
         emails = set()
         for uid, user in state['users'].items():
             require(type(user) is dict and identifier(user, 'id') == uid)
@@ -139,12 +176,12 @@ def import_state(body):
             validate_response(public(record), state, uid)
             require(record['reservation_id'] not in ids)
             ids.add(record['reservation_id'])
-            require(set(record) == {'user_id', 'reservation_id', 'reference', 'restaurant_id', 'table_id',
-                                   'party_size', 'status', 'starts_at_local', 'starts_at', 'ends_at', 'created_at'})
         check_occupancy(list(state['reservations'].values()), [])
         receipt_keys = set()
         for receipt in state['receipts']:
-            require(type(receipt) is dict and set(receipt) == {'user_id', 'method', 'path', 'key', 'body', 'response'})
+            require(type(receipt) is dict and set(receipt) == {'schema_version', 'user_id', 'method', 'path', 'key', 'body', 'response'})
+            require(type(receipt['schema_version']) is int and receipt['schema_version'] in (1, 2))
+            old_receipt = receipt['schema_version'] == 1
             uid = identifier(receipt, 'user_id')
             require(uid in state['users'] and receipt['method'] == 'POST'
                     and receipt['path'] in ('/reservations', '/reservation-moves'))
@@ -155,11 +192,16 @@ def import_state(body):
             receipt_keys.add(scope)
             response = receipt['response']
             if receipt['path'] == '/reservations':
-                validate_response(response, state, uid)
+                validate_response(response, state, uid, old_receipt)
                 require(response['status'] == 'confirmed')
                 rid = identifier(receipt['body'], 'restaurant_id')
                 require(rid == response['restaurant_id'])
-                proposed = booking(state['restaurants'][rid], receipt['body'])
+                request = receipt['body']
+                if old_receipt:
+                    request = {k: v for k, v in request.items() if k != 'table_ids'}
+                proposed = booking(state['restaurants'][rid], request)
+                if old_receipt:
+                    proposed.pop('table_ids')
                 require(all(response[k] == v for k, v in proposed.items()))
             else:
                 require(type(response) is dict and set(response) == {'reservations'})
@@ -170,19 +212,20 @@ def import_state(body):
                 seen = set()
                 restaurants = set()
                 for move, record in zip(moves, records):
-                    validate_response(record, state, uid)
+                    validate_response(record, state, uid, old_receipt)
                     require(record['status'] == 'confirmed' and type(move) is dict
                             and move.get('reference') == record['reference'])
-                    proposed = dict(record)
-                    proposed.update({k: v for k, v in move.items()
-                                     if k in ('table_id', 'starts_at_local', 'party_size')})
+                    changes = {k: v for k, v in move.items() if not (old_receipt and k == 'table_ids')}
+                    proposed = booking_fields(record, changes)
                     computed = booking(state['restaurants'][record['restaurant_id']], proposed)
+                    if old_receipt:
+                        computed.pop('table_ids')
                     require(all(record[k] == v for k, v in computed.items()))
                     require(record['reference'] not in seen)
                     seen.add(record['reference'])
                     restaurants.add(record['restaurant_id'])
                 require(len(restaurants) == 1)
-                check_occupancy(records, [])
+                check_occupancy([dict(r, table_ids=[r['table_id']]) if old_receipt else r for r in records], [])
         return state
     except (Error, KeyError, TypeError, ValueError, OverflowError):
         raise Error() from None

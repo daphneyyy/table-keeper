@@ -96,15 +96,46 @@ def hours(restaurant, day):
     return next((x for x in restaurant['opening_hours'] if x['weekday'] == WEEKDAYS[day.weekday()]), None)
 
 
+def selection(restaurant, fields):
+    require(not ('table_id' in fields and 'table_ids' in fields))
+    if 'table_id' in fields:
+        ids = [identifier(fields, 'table_id')]
+    else:
+        ids = field(fields, 'table_ids', list)
+        require(len(ids) > 0)
+        require(len(ids) <= 2, 422, 'combination_not_allowed')
+        for tid in ids:
+            identifier({'id': tid}, 'id')
+    require(len(set(ids)) == len(ids))
+    tables = {t['id']: t for t in restaurant['tables']}
+    require(all(tid in tables for tid in ids), 404, 'not_found')
+    if len(ids) == 2:
+        declared = next((p for p in restaurant.get('combinable', []) if set(p) == set(ids)), None)
+        require(declared is not None, 422, 'combination_not_allowed')
+        ids = list(declared)
+    return list(ids), sum(tables[tid]['capacity'] for tid in ids)
+
+
+def booking_fields(record, changes=None):
+    fields = dict(record)
+    fields.pop('table_id', None)
+    if 'table_ids' not in fields:
+        fields['table_ids'] = [record['table_id']]
+    if changes:
+        if 'table_id' in changes or 'table_ids' in changes:
+            fields.pop('table_ids', None)
+        fields.update({k: v for k, v in changes.items()
+                       if k in ('table_id', 'table_ids', 'starts_at_local', 'party_size')})
+    return fields
+
+
 def booking(restaurant, fields):
-    table_id = identifier(fields, 'table_id')
-    table = next((x for x in restaurant['tables'] if x['id'] == table_id), None)
-    require(table is not None, 404, 'not_found')
+    table_ids, capacity = selection(restaurant, fields)
     require('party_size' in fields and 'starts_at_local' in fields)
     size = party(fields['party_size'])
     naive = local_text(fields['starts_at_local'])
     start = resolve(restaurant['timezone'], naive)
-    require(size <= table['capacity'], 422, 'party_exceeds_capacity')
+    require(size <= capacity, 422, 'party_exceeds_capacity')
     opening = hours(restaurant, naive)
     require(opening is not None, 422, 'outside_opening_hours')
     minute = naive.hour * 60 + naive.minute
@@ -118,12 +149,15 @@ def booking(restaurant, fields):
         end = end.astimezone(start.tzinfo)
     except (OverflowError, ValueError):
         raise Error(422, 'outside_opening_hours') from None
-    return dict(restaurant_id=restaurant['id'], table_id=table_id, party_size=size,
-                starts_at_local=fields['starts_at_local'], starts_at=timestamp(start), ends_at=timestamp(end))
+    result = dict(restaurant_id=restaurant['id'], table_ids=table_ids, party_size=size,
+                  starts_at_local=fields['starts_at_local'], starts_at=timestamp(start), ends_at=timestamp(end))
+    if len(table_ids) == 1:
+        result['table_id'] = table_ids[0]
+    return result
 
 
 def overlaps(a, b):
-    return (a['restaurant_id'] == b['restaurant_id'] and a['table_id'] == b['table_id']
+    return (a['restaurant_id'] == b['restaurant_id'] and bool(set(a['table_ids']) & set(b['table_ids']))
             and instant(a['starts_at']) < instant(b['ends_at'])
             and instant(b['starts_at']) < instant(a['ends_at']))
 
