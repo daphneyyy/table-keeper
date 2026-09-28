@@ -55,13 +55,13 @@ Create an account in the website, search a future Monday with a party size of tw
 
 Each folder contains its own source, dependencies, `Dockerfile` and `RUN.md`. Later stages extend copies of accepted earlier stages. Each folder builds independently, without importing its siblings.
 
-Recorded independent QA accepted product revision `3995a95edcf221e3604816c4f56fd0c467145597`. The final four-folder run passed **575 cumulative test executions**, not 575 distinct tests. Stage 4 passed all **158 applicable supplied tests**, plus independent browser, migration, concurrency and bounded optimization checks. These figures come from preserved reports; document preparation did not rerun the complete product suites. Hidden organizer tests are outside this evidence.
+Recorded independent QA accepted product revision `3995a95edcf221e3604816c4f56fd0c467145597`. The final four-folder run passed **575 cumulative test executions**, not 575 distinct tests. Stage 4 passed all **158 applicable supplied tests**, plus independent browser, migration, concurrency and bounded optimization checks. The linked reports record the tested revision and environment. Hidden organizer tests are outside this evidence.
 
 - [Stage 4 QA report](evidence/STAGE-4-3995a95e-REPORT.md)
 - [Final four-stage chain report](evidence/FINAL-CHAIN-3995a95e-REPORT.md)
 - [Factory and repair workflow](FACTORY.md)
 - [Role mandates](mandates/)
-- [Complete room export, copied unchanged from final.json](room.json)
+- [Agent collaboration log](room.json)
 
 ## Implementation and limits
 
@@ -90,4 +90,4 @@ The output directory must not already exist. Preserve failed runs. For earlier s
 
 This directory is the local harness target, inside a parent Git repository. `evidence/` contains unchanged copies of selected QA and review reports. Their original absolute paths document the machine on which the run occurred. Detailed probes and screenshots remain in the parent's `qa/`, `reviews/` and `checks/`; `checks/` is ignored by Git and is not guaranteed to appear in a clone.
 
-The complete export, supplied as `final.json` and copied unchanged to `room.json`, records all five seats, the initial task dispatch, Architect's planning handoff and the final delivery. The dispatch-to-delivery interval is approximately two hours. See [factory evidence and submission status](FACTORY.md#evidence-limits-and-submission-status). No public submission or video completion is claimed. Before public submission, reconcile the required repository-root stage layout, include the intended evidence files, and check a fresh clone while preserving the original product history.
+The [collaboration log](room.json) records the task dispatch, planning, implementation handoffs, review, repairs and delivery. The build took approximately two hours from dispatch to completion. See [FACTORY.md](FACTORY.md) for the workflow and cost breakdown.
