@@ -52,7 +52,10 @@ python3 tests/check_combinations.py http://127.0.0.1:8080
 
 This uses only Python's standard library. Official conformance checks are run by
 the supplied harness, with this directory as the stage-2 Docker build context.
-Both scripts accept a second service URL to verify import into another container.
+The inherited `check_service.py` and `check_boundaries.py` scripts accept a second
+service URL to verify import into another container. `check_combinations.py`
+instead accepts an optional second URL pointing to an actual stage-1 service,
+which it populates and exports to test migration into the primary stage-2 URL.
 JSON retry bodies preserve arbitrary numeric exponents without expanding their
 values; historical timezone offsets containing seconds are rendered in UTC to
 retain the instant while satisfying RFC3339.
