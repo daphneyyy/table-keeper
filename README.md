@@ -55,10 +55,10 @@ Create an account in the website, search a future Monday with a party size of tw
 
 Each folder contains its own source, dependencies, `Dockerfile` and `RUN.md`. Later stages extend copies of accepted earlier stages. Each folder builds independently, without importing its siblings.
 
-Recorded independent QA accepted product revision `3995a95edcf221e3604816c4f56fd0c467145597`. The final four-folder run passed **575 cumulative test executions**, not 575 distinct tests. Stage 4 passed all **158 applicable supplied tests**, plus independent browser, migration, concurrency and bounded optimization checks. The linked reports record the tested revision and environment. Hidden organizer tests are outside this evidence.
+Recorded independent QA accepted product revision `3995a95edcf221e3604816c4f56fd0c467145597`. The final four-folder run passed **575 cumulative test executions**, not 575 distinct tests. Stage 4 passed all **158 applicable supplied tests**, plus independent browser, migration, concurrency and bounded optimization checks. QA records these results in the [collaboration log](room.json), including final acceptance message `ff4d16b2-4044-4216-b2a8-b2c06cf2536d`. Hidden organizer tests are outside this evidence.
 
-- [Stage 4 QA report](evidence/STAGE-4-3995a95e-REPORT.md)
-- [Final four-stage chain report](evidence/FINAL-CHAIN-3995a95e-REPORT.md)
+- [Bundled Stage 4 developer test report](stage-4/tests/evidence/report.json)
+- [Supplemental test scripts](stage-4/tests/)
 - [Factory and repair workflow](FACTORY.md)
 - [Role mandates](mandates/)
 - [Agent collaboration log](room.json)
@@ -71,23 +71,32 @@ State disappears on container restart. Run one application process. Successful r
 
 The required test reset/export/import controls are unauthenticated. Exported state includes session and credential material. The startup example binds to localhost for demonstration. Persistent storage, public deployment hardening and protection or removal of test controls would require additional work.
 
-## Reproduce the supplied checks
+## Run the bundled checks
 
-Use the separate challenge package with Python 3.12+, its `harness/requirements.txt`, Playwright Chromium and Docker. Set absolute paths for your checkout, then run from the challenge package:
+With the local application running, execute the supplemental HTTP checks from this repository root using Python 3:
 
 ```sh
-CHALLENGE_DIR=/absolute/path/to/dark-factory-wearedevs
-RESULT_DIR=/absolute/path/to/band-output/result
-CHECKS_DIR=/absolute/path/to/new-check-results
-cd "$CHALLENGE_DIR"
-python -m harness check "$RESULT_DIR" --track tablekeeper
-python -m harness run --track tablekeeper --repo "$RESULT_DIR" --all --mode isolated --out "$CHECKS_DIR"
+python3 stage-4/tests/check_service.py http://127.0.0.1:8080
+python3 stage-4/tests/check_boundaries.py http://127.0.0.1:8080
+python3 stage-4/tests/check_combinations.py http://127.0.0.1:8080
+python3 stage-4/tests/check_policies_series.py http://127.0.0.1:8080
+python3 stage-4/tests/check_replans_series_amend.py http://127.0.0.1:8080
+python3 stage-4/tests/check_stage4_boundaries.py http://127.0.0.1:8080
 ```
 
-The output directory must not already exist. Preserve failed runs. For earlier stages, expected next-stage overshoot failures are separate from applicable test failures. Each applicable suite must pass for the factory's acceptance standard.
+These checks reset their target and use synthetic accounts. Run them against a disposable local instance. The HTTP scripts use Python's standard library. The optimizer check requires the service dependencies and runs from `stage-4/` with `PYTHONPATH=. python3 tests/check_optimizer.py`. See [RUN.md](stage-4/RUN.md) for details.
 
-## Repository and evidence layout
+The bundled [developer report](stage-4/tests/evidence/report.json) records the cumulative isolated run at revision `e54d968326a43ae0db64839b725c7375f6166644`. Independent QA's subsequent acceptance at revision `3995a95edcf221e3604816c4f56fd0c467145597` is recorded in [room.json](room.json). The official challenge harness is not bundled in this repository.
 
-This directory is the local harness target, inside a parent Git repository. `evidence/` contains unchanged copies of selected QA and review reports. Their original absolute paths document the machine on which the run occurred. Detailed probes and screenshots remain in the parent's `qa/`, `reviews/` and `checks/`; `checks/` is ignored by Git and is not guaranteed to appear in a clone.
+## Repository contents
 
-The [collaboration log](room.json) records the task dispatch, planning, implementation handoffs, review, repairs and delivery. The build took approximately two hours from dispatch to completion. See [FACTORY.md](FACTORY.md) for the workflow and cost breakdown.
+| Path | Contents |
+|---|---|
+| `stage-1/` through `stage-4/` | Standalone application stages with source, packaging and startup instructions |
+| [mandates/](mandates/) | Five reusable role mandates |
+| [room.json](room.json) | Task dispatch, planning, implementation handoffs, reviews and delivery |
+| [stage-4/tests/](stage-4/tests/) | Supplemental verification scripts |
+| [stage-4/tests/evidence/](stage-4/tests/evidence/) | Bundled developer test results |
+| [FACTORY.md](FACTORY.md) | Factory setup, workflow, repair examples, timing and cost |
+
+The build took approximately two hours from task dispatch to delivery, with estimated usage of 18.8 million tokens and US$29.68 in model spend.

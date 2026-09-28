@@ -16,9 +16,21 @@ All five seats use **Codex**, model **`gpt-6-astra`**, with **medium** reasoning
 | Frontend Engineer | Browser interfaces, real-service integration and focused browser checks | [frontend-engineer.md](mandates/frontend-engineer.md) |
 | QA Engineer | Independent verification, consolidated rejection/acceptance and preserved evidence | [qa-engineer.md](mandates/qa-engineer.md) |
 
+## Agent roster
+
+The five seats use Codex with `gpt-6-astra` at medium reasoning effort. IDs match the `senderId` values in [room.json](room.json).
+
+| Role | Agent ID |
+|---|---|
+| Team Lead | `d0dd773f-c3bd-4b49-82cf-c12190c56672` |
+| Architect | `afa04c6d-9f41-4b85-adbf-5fa1d3838433` |
+| Backend Engineer | `8ba99f3f-8c06-4625-8992-7545eeb4e699` |
+| Frontend Engineer | `74a32ff1-92ed-49b0-a72d-3796b3027734` |
+| QA Engineer | `a88ab9c1-8286-4099-8851-b06b5be3a0e2` |
+
 ## Recreate the factory
 
-1. Prepare Band Desktop, Git, a running Docker daemon, and model-provider access. For this challenge, also prepare Python 3.12+, the supplied harness dependencies and Playwright Chromium. Keep the challenge package separate from the output checkout.
+1. Prepare Band Desktop, Git, a running Docker daemon, and model-provider access. Prepare Python 3.12+ and browser tooling for verification. Supply the target project requirements and its acceptance tools when dispatching a new task.
 2. Create five distinct seats using the names above. Select Codex, `gpt-6-astra` and medium reasoning for each. Assign the corresponding mandate file. Seat names describe the roles; use the actual handles that Band assigns for communication.
 3. Give every seat access to the same absolute output checkout and complete requirements. Prepare Git identity and the filesystem, container and browser permissions needed for the run. Keep provider credentials outside the product and its history.
 4. Confirm direct mentions reach the intended seats and receive replies. Use one shared room for the staged delivery. The collaboration log records direct handoffs and replies between the roles.
@@ -59,7 +71,7 @@ The browser rendered `#687065` text on `#efeee4`, measuring **4.401412:1** at bo
 
 The fix changed one CSS color to `#596252`. Independent browser measurements rose to **5.4711559863:1** in both viewports. QA reran contrast, browser recovery, migration and cumulative isolated checks and confirmed that the backend and earlier stage were unchanged. The interval from the first blocker message to acceptance was approximately **4 minutes 41 seconds**.
 
-Evidence: [rejection](evidence/STAGE-2-cf4f6c41-REPORT.md), [acceptance](evidence/STAGE-2-42a2b990-REPORT.md), and the corresponding room messages `4330e8a9-9af9-4da7-9eba-2ab533a2d9d4`, `58e17743-9685-41e1-9563-70f00581d1ba`, `70c463c3-2f50-4493-9d9d-ea8e04b81817` and `fa0b58c0-1ea7-41f7-9bef-217312b4a744`.
+The [room log](room.json) records the rejection, repair assignment, committed fix and independent acceptance in messages `4330e8a9-9af9-4da7-9eba-2ab533a2d9d4`, `58e17743-9685-41e1-9563-70f00581d1ba`, `70c463c3-2f50-4493-9d9d-ea8e04b81817` and `fa0b58c0-1ea7-41f7-9bef-217312b4a744`.
 
 ## A later integration failure
 
@@ -67,7 +79,7 @@ Stage 4 exposed a subtler difference between the original booking receipt and cu
 
 Frontend reproduced the mismatch against a real service. Lead authorized a change only to Stage 4's `app/static/app.js`. The fix preserved the original receipt and retry identity, then separately fetched current reservation details for display. If that read failed, the UI kept the confirmed reference and explicitly labeled the original details. Guards prevented a late response from overwriting a newer attempt.
 
-The correction is commit `1a96fceb69c1110b557a01bfdc30f452759717c9`. The [compatibility review](evidence/stage-4-compatibility-review.md) records the initial reproduction and fix. [Independent Stage 4 QA](evidence/STAGE-4-3995a95e-REPORT.md) verified current seating, failed supplementary reads, delayed responses and prior recovery behavior in the final candidate.
+The correction is commit `1a96fceb69c1110b557a01bfdc30f452759717c9`, implemented in [the Stage 4 browser code](stage-4/app/static/app.js). In the [room log](room.json), final QA acceptance message `ff4d16b2-4044-4216-b2a8-b2c06cf2536d` records verification of current seating, failed supplementary reads, delayed responses and prior recovery behavior.
 
 QA also preserved its own unsuccessful setup attempts: the first optimizer probe expected a private field in a public response, and another ran before service readiness. QA corrected the probe and readiness handling, then reran successfully. These were test-setup failures, not product defects or passing runs.
 
@@ -102,13 +114,14 @@ The [room log](room.json) records one human task dispatch followed by planning, 
 
 Dispatch to delivery took **2 hours 4 seconds**. This is wall-clock elapsed time, excluding preparation before dispatch and later submission work. Parallel seat activity means it should not be interpreted as summed compute time.
 
-The log contains 2,170 events across the five seats, including 811 tool calls and their results. The [final chain report](evidence/FINAL-CHAIN-3995a95e-REPORT.md) records 120/145/152/158 passing cumulative executions and standalone startup with no outbound network, a custom port, no mounts and 2 CPU/2 GiB limits.
+The log contains 2,170 events across the five seats, including 811 tool calls and their results. Final QA acceptance message `ff4d16b2-4044-4216-b2a8-b2c06cf2536d` in [room.json](room.json) records 120/145/152/158 passing cumulative executions and standalone startup with no outbound network, a custom port, no mounts and 2 CPU/2 GiB limits.
 
-## Evidence
+## Included evidence
 
-- [room.json](room.json): task dispatch, inter-agent handoffs, review decisions and delivery.
-- [Stage 2 rejection](evidence/STAGE-2-cf4f6c41-REPORT.md) and [acceptance](evidence/STAGE-2-42a2b990-REPORT.md): measured contrast failure and independent verification of the repair.
-- [Stage 4 compatibility review](evidence/stage-4-compatibility-review.md): current-seating display correction and browser recovery checks.
-- [Stage 4 QA](evidence/STAGE-4-3995a95e-REPORT.md) and [final chain report](evidence/FINAL-CHAIN-3995a95e-REPORT.md): cumulative verification at the accepted revision.
+- [room.json](room.json): task dispatch, inter-agent handoffs, review decisions, fixes and independent final acceptance. Message IDs above identify the relevant exchanges.
+- [Role mandates](mandates/): responsibilities and handoff requirements for each seat.
+- [Stage 4 test scripts](stage-4/tests/): executable supplemental checks for service behavior, boundaries, combinations, policies, recurring bookings and seating repairs.
+- [Developer test report](stage-4/tests/evidence/report.json): cumulative isolated results at revision `e54d968326a43ae0db64839b725c7375f6166644`.
+- [Developer test logs](stage-4/tests/evidence/): preserved output from the bundled checks.
 
-Reports retain the original paths and commands used during verification. Detailed probes and screenshots are in the parent repository's `qa/`, `reviews/` and `checks/` directories. The `checks/` directory is ignored by Git, so its contents require separate inclusion when distributing the full evidence set. Test results describe the recorded environments and scenarios; hidden organizer tests are outside this evidence.
+The developer report and the later independent QA acceptance are distinct verification records. Test results describe the recorded environments and scenarios; hidden organizer tests are outside this evidence.
