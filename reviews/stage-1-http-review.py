@@ -30,6 +30,7 @@ def login():
 def show(name, response):
     data = response.json()
     print(name, response.status_code, data.get('error', {}).get('code', 'non-error-envelope'))
+    return response
 
 reset()
 for path in ['/restaurants', '/restaurants/r', '/availability?restaurant_id=r&date=2030-01-01&party_size=2']:
@@ -68,11 +69,30 @@ reset()
 h = login()
 headers = dict(h, **{'Idempotency-Key': 'large-ignored-number'})
 raw = json.dumps(body)[:-1] + ', "ignored": 1e400}'
-show('large ignored number create', c.post('/reservations', content=raw, headers=headers))
-show('export after large ignored number', c.get('/_test/export'))
+created = show('large ignored number create', c.post('/reservations', content=raw, headers=headers))
+assert created.status_code == 201
+exported = show('export after large ignored number', c.get('/_test/export'))
+assert exported.status_code == 200
 changed = json.dumps(body)[:-1] + ', "ignored": 2e400}'
-show('different large ignored number same key', c.post('/reservations', content=changed, headers=headers))
+different = show('different large ignored number same key', c.post('/reservations', content=changed, headers=headers))
+assert different.status_code == 409 and different.json()['error']['code'] == 'idempotency_key_reuse'
+reset()
+# Preserve exact export bytes: the client's default JSON decoder is itself lossy.
+assert c.post('/_test/import', content=exported.content, headers={'Content-Type': 'application/json'}).status_code == 204
+replayed = c.post('/reservations', content=raw, headers=headers)
+assert replayed.status_code == 200 and replayed.json() == created.json()
+assert c.post('/reservations', content=changed, headers=headers).status_code == 409
+print('PASS large-number export/import retains original receipt and numeric distinction')
 
 reset()
-show('unsupported TRACE method', request('TRACE', '/health'))
-show('year 0001 availability', c.get('/availability', params={'restaurant_id': 'r', 'date': '0001-01-01', 'party_size': '2'}))
+unsupported = show('unsupported TRACE method', request('TRACE', '/health'))
+assert unsupported.status_code == 405 and unsupported.json()['error']['message']
+early = show('year 0001 availability', c.get('/availability', params={'restaurant_id': 'r', 'date': '0001-01-01', 'party_size': '2'}))
+assert early.status_code == 200 and early.json()['slots']
+early_local = early.json()['slots'][0]['starts_at_local']
+assert early_local == '0001-01-01T18:00'
+h = login()
+early_create = c.post('/reservations', json=dict(body, starts_at_local=early_local), headers=dict(h, **{'Idempotency-Key': 'early-year'}))
+assert early_create.status_code == 201
+assert early_create.json()['starts_at_local'] == early_local
+print('PASS early-year availability can be booked unchanged')
