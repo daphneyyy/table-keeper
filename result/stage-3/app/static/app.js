@@ -198,17 +198,20 @@
       const box = element('div'); empty(box, 'A quiet day here.', 'There are no booking times on this date. Try another day for your gathering.', 'no-slots'); hosts.results.append(box); return;
     }
     const grid = element('div', {class: 'seating-list', 'data-testid': 'availability-grid'});
-    const choices = restaurant.tables.map(t => ({ids: [t.id], capacity: t.capacity}));
+    const choices = restaurant.tables.map(t => ({ids: [t.id]}));
     for (const pair of restaurant.combinable || []) {
       if (availability.slots.some(slot => (slot.available_options || []).some(option => option.table_ids.length === 2 && pair.every(id => option.table_ids.includes(id))))) {
-        choices.push({ids: pair, capacity: pair.reduce((sum, id) => sum + restaurant.tables.find(t => t.id === id).capacity, 0)});
+        choices.push({ids: pair});
       }
     }
     for (const choice of choices) {
       const label = tableLabels(restaurant, choice.ids);
       const name = element('span', {class: 'seating-name'}, choice.ids.length > 1 ? label : `Table ${label}`);
       if (choice.ids.length > 1) name.append(text('span', 'pair-badge', 'Together as one'));
-      const row = element('section', {class: 'seating-row'}, element('div', {class: 'seating-row-head'}, name, text('span', 'capacity', `Up to ${choice.capacity} guests`)));
+      // Restaurant detail retains fixture capacities; the dated options are authoritative.
+      const option = availability.slots.flatMap(slot => slot.available_options || []).find(option => option.table_ids.length === choice.ids.length && choice.ids.every(id => option.table_ids.includes(id)));
+      const capacityLabel = option ? `Up to ${option.capacity} guests` : (choice.ids.length === 1 ? 'Single table' : 'Two tables together');
+      const row = element('section', {class: 'seating-row'}, element('div', {class: 'seating-row-head'}, name, text('span', 'capacity', capacityLabel)));
       const times = element('div', {class: 'seat-times'});
       for (const slot of availability.slots) {
         const available = choice.ids.length === 1 ? slot.available_table_ids.includes(choice.ids[0]) : (slot.available_options || []).some(o => o.table_ids.length === choice.ids.length && choice.ids.every(id => o.table_ids.includes(id)));
@@ -243,9 +246,11 @@
     const party = field('Number of guests', 'booking-party-size', {type: 'number', min: 1, step: 1, required: true, value: chosen.party});
     const submit = element('button', {class: 'primary', type: 'submit', 'data-testid': 'booking-submit'}, 'Reserve this table →');
     const feedback = element('div', {'aria-live': 'polite'});
+    const neutralTerms = `Times are local to ${chosen.restaurant.timezone}. Cancellation terms are confirmed with your reservation.`;
+    const fineprint = text('p', 'fine-print', neutralTerms);
     form.append(summary, party.node, submit);
-    host.replaceChildren(text('span', 'eyebrow', 'One lovely evening'), text('h2', '', 'Make it a date.'), form, feedback, text('p', 'fine-print', `Times are local to ${chosen.restaurant.timezone}. Cancellation and changes close ${chosen.restaurant.cancellation_cutoff_minutes} minutes before your reservation.`));
-    party.input.addEventListener('input', () => { chosen.party = party.input.value; chosen.revision++; chosen.pending = null; feedback.replaceChildren(); submit.textContent = 'Reserve this table →'; });
+    host.replaceChildren(text('span', 'eyebrow', 'One lovely evening'), text('h2', '', 'Make it a date.'), form, feedback, fineprint);
+    party.input.addEventListener('input', () => { chosen.party = party.input.value; chosen.revision++; chosen.pending = null; feedback.replaceChildren(); fineprint.textContent = neutralTerms; submit.textContent = 'Reserve this table →'; });
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (!session || session.user_id !== chosen.user) { feedback.replaceChildren(); notice(feedback, 'Please log in before reserving this table.', 'booking-error'); return; }
@@ -255,11 +260,13 @@
       }
       const pending = chosen.pending;
       const revision = chosen.revision;
-      feedback.replaceChildren(); submit.disabled = true; submit.textContent = 'Reserving your table…';
+      feedback.replaceChildren(); fineprint.textContent = neutralTerms; submit.disabled = true; submit.textContent = 'Reserving your table…';
       try {
         const reservation = await api('/reservations', {method: 'POST', headers: {'Idempotency-Key': pending.key}, body: pending.body});
         if (selection !== chosen || revision !== chosen.revision) return;
         if (!reservation.reference) throw new Error('Missing confirmation');
+        const cutoff = reservation.accepted_terms?.cancellation_cutoff_minutes;
+        if (Number.isInteger(cutoff) && cutoff >= 0) fineprint.textContent = `Times are local to ${chosen.restaurant.timezone}. Under this reservation’s accepted terms, cancellation and changes close ${cutoff} minutes before its start.`;
         const labels = tableLabels(chosen.restaurant, tableIds(reservation));
         const confirmation = element('section', {class: 'confirmation', 'data-testid': 'confirmation', role: 'status'}, text('span', 'eyebrow', '✓ Your table is reserved'), text('h3', '', 'See you at the table.'), text('p', '', 'Your confirmation reference'), element('strong', {class: 'confirmation-reference', 'data-testid': 'confirmation-reference'}, reservation.reference), element('p', {'data-testid': 'confirmation-details'}, `${chosen.restaurant.name} · ${labels} · ${reservation.starts_at_local}`), element('p', {'data-testid': 'confirmation-tables'}, `Your tables: ${labels}`), element('a', {href: `/lookup?reference=${encodeURIComponent(reservation.reference)}`}, 'View or manage reservation →'));
         feedback.append(confirmation); submit.textContent = 'Reservation confirmed · check again';
