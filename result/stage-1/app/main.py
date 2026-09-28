@@ -1,5 +1,4 @@
 """Explicit HTTP parsing avoids framework coercion and validation envelopes."""
-import simplejson as json
 import logging
 import os
 
@@ -9,6 +8,7 @@ from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
 from .rules import Error, require
+from . import json_values
 from .service import Service
 
 app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
@@ -16,12 +16,8 @@ service = Service()
 
 
 def json_response(value, status):
-    return Response(json.dumps(value, use_decimal=True, ensure_ascii=True, allow_nan=False),
+    return Response(json_values.dumps(value),
                     status_code=status, media_type='application/json; charset=utf-8')
-
-
-def bad_constant(_):
-    raise ValueError('not a JSON number')
 
 
 @app.exception_handler(HTTPException)
@@ -39,7 +35,7 @@ async def endpoint(request: Request, path: str):
             optional = request.url.path.endswith('/cancel')
             try:
                 if raw or not optional:
-                    body = json.loads(raw, parse_constant=bad_constant, use_decimal=True)
+                    body = json_values.loads(raw)
             except (ValueError, UnicodeError, RecursionError):
                 raise Error(400, 'malformed_request') from None
             require(type(body) is dict, 400, 'malformed_request')

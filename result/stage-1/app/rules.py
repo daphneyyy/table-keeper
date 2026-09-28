@@ -1,8 +1,8 @@
 """Strict JSON validation and shared restaurant time/occupancy rules."""
 import re
-from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from .json_values import Number, number_equal
 
 UTC = timezone.utc
 WEEKDAYS = ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun')
@@ -84,6 +84,14 @@ def instant(value):
         raise Error() from None
 
 
+def timestamp(value):
+    # Historical IANA local-mean-time offsets can include seconds, which RFC3339
+    # does not permit. UTC preserves the exact instant without rounding offsets.
+    if value.utcoffset().total_seconds() % 60:
+        value = value.astimezone(UTC)
+    return value.isoformat()
+
+
 def hours(restaurant, day):
     return next((x for x in restaurant['opening_hours'] if x['weekday'] == WEEKDAYS[day.weekday()]), None)
 
@@ -111,7 +119,7 @@ def booking(restaurant, fields):
     except (OverflowError, ValueError):
         raise Error(422, 'outside_opening_hours') from None
     return dict(restaurant_id=restaurant['id'], table_id=table_id, party_size=size,
-                starts_at_local=fields['starts_at_local'], starts_at=start.isoformat(), ends_at=end.isoformat())
+                starts_at_local=fields['starts_at_local'], starts_at=timestamp(start), ends_at=timestamp(end))
 
 
 def overlaps(a, b):
@@ -130,8 +138,8 @@ def check_occupancy(candidates, existing):
 
 def json_equal(a, b):
     # JSON numbers compare numerically, but booleans are a distinct JSON type.
-    if type(a) in (int, float, Decimal) and type(b) in (int, float, Decimal):
-        return a == b
+    if type(a) in (int, Number) and type(b) in (int, Number):
+        return number_equal(a, b)
     if type(a) is not type(b):
         return False
     if isinstance(a, dict):

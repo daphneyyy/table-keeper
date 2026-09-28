@@ -35,7 +35,12 @@ Developer supplemental checks (against a running instance):
 
 ```sh
 python3 tests/check_service.py http://127.0.0.1:8080
+python3 tests/check_boundaries.py http://127.0.0.1:8080
 ```
 
 This uses only Python's standard library. Official conformance checks are run by
 the supplied harness, with this directory as the stage-1 Docker build context.
+Both scripts accept a second service URL to verify import into another container.
+JSON retry bodies preserve arbitrary numeric exponents without expanding their
+values; historical timezone offsets containing seconds are rendered in UTC to
+retain the instant while satisfying RFC3339.
