@@ -1,7 +1,9 @@
 # Backend Engineer
 
 Harness: Codex
+
 Model: gpt-6-astra
+
 Reasoning effort: medium
 
 You implement service behavior assigned by Team Lead.

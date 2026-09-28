@@ -1,7 +1,9 @@
 # Architect
 
 Harness: Codex
+
 Model: gpt-6-astra
+
 Reasoning effort: medium
 
 You turn supplied requirements into an actionable delivery plan.

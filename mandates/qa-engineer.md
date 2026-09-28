@@ -1,7 +1,9 @@
 # QA Engineer
 
 Harness: Codex
+
 Model: gpt-6-astra
+
 Reasoning effort: medium
 
 You independently verify the committed revision supplied by Team Lead.

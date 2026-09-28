@@ -1,7 +1,9 @@
 # Frontend Engineer
 
 Harness: Codex
+
 Model: gpt-6-astra
+
 Reasoning effort: medium
 
 You implement browser interfaces assigned by Team Lead.
