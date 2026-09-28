@@ -1,0 +1,10 @@
+PASS 50 identical requests: one commit, immutable identical responses; 0.037s
+PASS 50 conflicting requests; half-open adjacency and partial overlap
+PASS atomic swaps, failed rollback/key reuse, saved responses after cancellation
+PASS JSON equality, field type distinctions, failed requests leave retry keys reusable
+PASS exact large-number receipts/export/import and framework error envelope
+PASS 8-item no-ops, shape limits, 50-way batch replay, input-order non-occupancy errors
+PASS past bookings, current cutoff precedence, four-digit years, 50 concurrent logins
+PASS Berlin/New York gap omission, gap refusal, first fold and absolute duration
+PASS replacement/repeated import, sessions/hashes/identities/receipts, invalid-import atomic rollback
+All supplemental stage-1 checks passed

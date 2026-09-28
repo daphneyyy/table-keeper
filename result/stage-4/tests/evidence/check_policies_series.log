@@ -1,0 +1,8 @@
+PASS manager privacy, immutable dated policies, out-of-order dates/ties, accepted terms, resulting-policy amendment and no-op invariance
+PASS policy validation rollback, original policy receipts, independent ordered explanations and strict explain parameter
+PASS 50-way expected-revision race, stale-before-field validation, no-op history, single cancellation increment and private decision
+PASS pair history, 50-way adoption, unchanged anchor, permanent exceptions, once-per-series/batch counters, independent cancellation and original series/move snapshots
+PASS occurrence-index error precedence, policy-per-date adoption, atomic rollback and failed-key reuse
+PASS accepted cutoff survives looser policy; stale revision precedes cutoff
+PASS recurring local dates across both zones: DST gap rollback and first-fold absolute duration
+All supplemental stage-3 checks passed

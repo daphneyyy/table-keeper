@@ -1,0 +1,2 @@
+PASS historical Berlin instants preserved with RFC3339 timestamps
+PASS huge positive/negative exponents, signed zero, 5000-digit exponent/coefficient, numeric equivalence, distinct retries and portable snapshots

@@ -1,0 +1,3 @@
+PASS pair declaration/order/capacity, both-member occupancy, singles/pairs amendment and cancellation, immutable receipts
+PASS pair atomic moves, 50 identical batch retries, rollback, export/import, 50 competing pair/single creates
+PASS cancelled pair seed retains identity and consumes no occupancy

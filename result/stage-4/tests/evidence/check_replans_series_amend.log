@@ -1,0 +1,8 @@
+PASS preview purity, manager/auth/validation, objective, fixed boundary, closure/explain/pair exclusion, reassigned history, receipts, exact snapshot round-trip
+PASS stale/infeasible rollback, 30-way atomic application race and empty-plan invalidation
+PASS series owner/input rules, exceptions/cancellations, original dates, exact no-ops, repair counter/flags, retained repaired table and original receipts after import
+PASS 30-way series revision race; nonoccupancy-before-occupancy precedence; conflict/closure atomic rollback
+PASS actual populated prior export -> stage4 amendment with hashes/tokens/receipts and changed/cancelled series from http://127.0.0.1:18411
+PASS actual populated prior export -> stage4 amendment with hashes/tokens/receipts and changed/cancelled series from http://127.0.0.1:18412
+PASS actual populated prior export -> stage4 amendment with hashes/tokens/receipts and changed/cancelled series from http://127.0.0.1:18413
+All stage-4 supplemental HTTP checks passed

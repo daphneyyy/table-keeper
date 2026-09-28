@@ -1,0 +1,5 @@
+PASS exact supported 6-table/4-pair/6-booking boundary and rollback at each documented planning limit
+PASS accepted capacities after policy shrink, operator repair past cutoff, corrupted plan/closure/history/receipt import rollback
+PASS unrelated-restaurant revision isolation and fixed booking conflict beyond closure interval
+PASS empty eligible and expired no-op stability; stale-before-cutoff and real-change cutoff
+PASS per-occurrence DST gap validation and whole-series rollback in New York and Berlin
