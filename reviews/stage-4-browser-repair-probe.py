@@ -56,6 +56,7 @@ async def main():
   replay=await response.value
   assert replay.status==200 and await replay.json()==original
   await expect(page.get_by_test_id('confirmation-reference')).to_have_text(ref)
+  await expect(page.get_by_test_id('confirmation-tables')).to_have_text('Your tables: Garden side')
   result={'original_receipt_tables':original['table_ids'],'current_lookup_tables':current['table_ids'],
           'replayed_confirmation_tables':await page.get_by_test_id('confirmation-tables').inner_text(),
           'replayed_confirmation_details':await page.get_by_test_id('confirmation-details').inner_text(),
@@ -64,16 +65,57 @@ async def main():
   await page.set_viewport_size({'width':375,'height':812})
   assert await page.evaluate('document.documentElement.scrollWidth <= innerWidth')
   await page.screenshot(path=str(out/'replayed-confirmation-375.png'),full_page=True)
+  # Failed supplementary reads retain the known POST success, clearly historical.
+  detail_url=base+'/reservations/'+ref
+  async def fail_detail(route): await route.abort('failed')
+  await page.route(detail_url,fail_detail)
+  await page.get_by_test_id('booking-submit').click()
+  await expect(page.get_by_test_id('confirmation')).to_contain_text('current reservation details are unavailable')
+  await expect(page.get_by_test_id('confirmation-reference')).to_have_text(ref)
+  await expect(page.get_by_test_id('confirmation-tables')).to_have_text('Original tables: Window nook')
+  await expect(page.get_by_test_id('booking-error')).to_have_count(0)
+  await expect(page.get_by_test_id('booking-uncertain')).to_have_count(0)
+  await page.screenshot(path=str(out/'current-read-failed-375.png'),full_page=True)
+  await page.unroute(detail_url,fail_detail)
+  # Series changes refresh current time without changing the create receipt.
+  adopted=c.post('/series',json={'anchor_reference':ref,'count':2,'interval_weeks':1},headers={**owner,'Idempotency-Key':'adopt'})
+  assert adopted.status_code==201,adopted.text
+  sid=adopted.json()['series_id']
+  amended=c.post('/series/'+sid+'/amend',json={'expected_revision':1,'from_index':0,'local_time':'19:00'},headers={**owner,'Idempotency-Key':'amend'})
+  assert amended.status_code==201,amended.text
+  await page.get_by_test_id('booking-submit').click()
+  await expect(page.get_by_test_id('confirmation-details')).to_contain_text('2030-01-01T19:00')
+  # An older detail GET cannot overwrite a newer successful attempt.
+  release=asyncio.Event();started=asyncio.Event();first=True
+  async def delay_detail(route):
+   nonlocal first
+   if first:
+    first=False
+    response=await route.fetch();started.set();await release.wait();await route.fulfill(response=response)
+   else: await route.continue_()
+  await page.route(detail_url,delay_detail)
+  await page.get_by_test_id('booking-submit').click()
+  await started.wait()
+  moved=c.patch('/reservations/'+ref,json={'table_id':'c'},headers=owner)
+  assert moved.status_code==200,moved.text
+  await page.get_by_test_id('booking-submit').click()
+  await expect(page.get_by_test_id('confirmation-tables')).to_have_text('Your tables: Round table')
+  release.set();await page.wait_for_timeout(200)
+  await expect(page.get_by_test_id('confirmation-tables')).to_have_text('Your tables: Round table')
+  await page.unroute(detail_url,delay_detail)
+  result['failed_supplementary_get_preserves_confirmed_original_details']=True
+  result['series_amendment_current_time_refreshed']=True
+  result['older_detail_response_cannot_overwrite_new_attempt']=True
   await page.get_by_role('link',name='View or manage reservation').click()
-  await expect(page.get_by_test_id('reservation-tables')).to_have_text('Garden side')
+  await expect(page.get_by_test_id('reservation-tables')).to_have_text('Round table')
   result['lookup_label']=await page.get_by_test_id('reservation-tables').inner_text()
   await page.get_by_role('link',name='Find a table',exact=True).click()
   await page.get_by_test_id('restaurant-select').select_option('r')
   await page.get_by_test_id('date-input').fill('2030-01-01')
   await page.get_by_test_id('search-button').click()
   await expect(page.get_by_test_id('slot-a-18:00')).to_have_attribute('data-available','false')
-  await expect(page.get_by_test_id('slot-b-18:00')).to_have_attribute('data-available','false')
-  await expect(page.get_by_test_id('slot-c-18:00')).to_have_attribute('data-available','true')
+  await expect(page.get_by_test_id('slot-b-18:00')).to_have_attribute('data-available','true')
+  await expect(page.get_by_test_id('slot-c-18:00')).to_have_attribute('data-available','false')
   result['availability_reflects_closure_and_reassignment']=True
   (out/'repair-ui.json').write_text(json.dumps(result,indent=2));print(json.dumps(result,indent=2))
   await browser.close()

@@ -1,0 +1,6 @@
+PASS login, single booking, unchanged repeat, lookup, cancel
+PASS combination committed-response loss, unchanged retry body/key, in-page import and identity
+PASS conflict refresh preserves selected form and inputs
+PASS out-of-order metadata and availability cannot overwrite newer grid/form
+PASS mobile layout and edited field creates new request (occupied-slot refusal)
+PASS closed day, public browsing/auth gate, signup, direct-route session, zero browser errors
