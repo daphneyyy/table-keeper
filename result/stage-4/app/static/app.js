@@ -221,7 +221,7 @@
           if (!available) return;
           if (!session) { hosts.feedback.replaceChildren(); notice(hosts.feedback, element('span', {}, 'Please ', element('a', {href: '/login'}, 'log in'), ' to reserve your table.'), 'auth-error'); return; }
           hosts.feedback.replaceChildren();
-          selection = {restaurant, ids: [...choice.ids], local: slot.starts_at_local, party: String(query.party_size), pending: null, revision: 0, hosts, user: session.user_id};
+          selection = {restaurant, ids: [...choice.ids], local: slot.starts_at_local, party: String(query.party_size), pending: null, revision: 0, attempt: 0, hosts, user: session.user_id};
           renderResults(); renderBooking();
           if (window.innerWidth < 691) hosts.booking.scrollIntoView({behavior: 'smooth', block: 'start'});
         }}, time);
@@ -260,18 +260,37 @@
       }
       const pending = chosen.pending;
       const revision = chosen.revision;
+      const attempt = ++chosen.attempt;
+      const isCurrent = () => selection === chosen && revision === chosen.revision && attempt === chosen.attempt;
       feedback.replaceChildren(); fineprint.textContent = neutralTerms; submit.disabled = true; submit.textContent = 'Reserving your table…';
       try {
         const reservation = await api('/reservations', {method: 'POST', headers: {'Idempotency-Key': pending.key}, body: pending.body});
-        if (selection !== chosen || revision !== chosen.revision) return;
+        if (!isCurrent()) return;
         if (!reservation.reference) throw new Error('Missing confirmation');
-        const cutoff = reservation.accepted_terms?.cancellation_cutoff_minutes;
-        if (Number.isInteger(cutoff) && cutoff >= 0) fineprint.textContent = `Times are local to ${chosen.restaurant.timezone}. Under this reservation’s accepted terms, cancellation and changes close ${cutoff} minutes before its start.`;
-        const labels = tableLabels(chosen.restaurant, tableIds(reservation));
-        const confirmation = element('section', {class: 'confirmation', 'data-testid': 'confirmation', role: 'status'}, text('span', 'eyebrow', '✓ Your table is reserved'), text('h3', '', 'See you at the table.'), text('p', '', 'Your confirmation reference'), element('strong', {class: 'confirmation-reference', 'data-testid': 'confirmation-reference'}, reservation.reference), element('p', {'data-testid': 'confirmation-details'}, `${chosen.restaurant.name} · ${labels} · ${reservation.starts_at_local}`), element('p', {'data-testid': 'confirmation-tables'}, `Your tables: ${labels}`), element('a', {href: `/lookup?reference=${encodeURIComponent(reservation.reference)}`}, 'View or manage reservation →'));
-        feedback.append(confirmation); submit.textContent = 'Reservation confirmed · check again';
+        // The POST receipt stays immutable. Current seating is a separate, optional read.
+        const showConfirmation = (details, current, note) => {
+          const cutoff = details.accepted_terms?.cancellation_cutoff_minutes;
+          fineprint.textContent = neutralTerms;
+          if (Number.isInteger(cutoff) && cutoff >= 0) fineprint.textContent = `Times are local to ${chosen.restaurant.timezone}. Under ${current ? 'this reservation’s' : 'the original booking’s'} accepted terms, cancellation and changes close ${cutoff} minutes before its start.`;
+          const labels = tableLabels(chosen.restaurant, tableIds(details));
+          const cancelled = current && details.status === 'cancelled';
+          const confirmation = element('section', {class: 'confirmation', 'data-testid': 'confirmation', role: 'status'}, text('span', 'eyebrow', current ? (cancelled ? 'Reservation cancelled' : '✓ Your table is reserved') : '✓ Original booking confirmed'), text('h3', '', cancelled ? 'Your plans have changed.' : 'See you at the table.'), text('p', '', 'Your confirmation reference'), element('strong', {class: 'confirmation-reference', 'data-testid': 'confirmation-reference'}, reservation.reference), element('p', {'data-testid': 'confirmation-details'}, `${current ? 'Current details' : 'Original booking details'} · ${chosen.restaurant.name} · ${labels} · ${details.starts_at_local}`), element('p', {'data-testid': 'confirmation-tables'}, `${current ? 'Your tables' : 'Original tables'}: ${labels}`), text('p', '', current ? `Current status: ${details.status}` : note), element('a', {href: `/lookup?reference=${encodeURIComponent(reservation.reference)}`}, 'View or manage reservation →'));
+          feedback.replaceChildren(confirmation);
+        };
+        showConfirmation(reservation, false, 'Your booking succeeded. Checking current reservation details…');
+        submit.textContent = 'Reservation confirmed · check again';
+        submit.disabled = false;
+        try {
+          const current = await api(`/reservations/${encodeURIComponent(reservation.reference)}`);
+          if (!isCurrent()) return;
+          if (current.reference !== reservation.reference || !current.starts_at_local || !tableIds(current).length) throw new Error('Invalid current details');
+          showConfirmation(current, true);
+        } catch (_) {
+          if (!isCurrent()) return;
+          showConfirmation(reservation, false, 'Your booking succeeded, but current reservation details are unavailable. The original details above may have changed. Check again or open your reservation to refresh them.');
+        }
       } catch (error) {
-        if (selection !== chosen || revision !== chosen.revision) return;
+        if (!isCurrent()) return;
         if (error instanceof ApiError) {
           notice(feedback, error.code === 'table_unavailable' ? 'That table was just taken. We’ve refreshed the times below; your choices are still here so you can choose another table.' : error.message, 'booking-error');
           if (error.code === 'table_unavailable' && search) runSearch(search.query, chosen.hosts, true);
@@ -281,8 +300,10 @@
           submit.textContent = 'Retry confirmation →';
         }
       } finally {
-        submit.disabled = false;
-        if (revision !== chosen.revision) submit.textContent = 'Reserve this table →';
+        if (selection === chosen && attempt === chosen.attempt) {
+          submit.disabled = false;
+          if (revision !== chosen.revision) submit.textContent = 'Reserve this table →';
+        }
       }
     });
   }
